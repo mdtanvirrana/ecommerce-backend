@@ -21,6 +21,8 @@ class StaffResource extends JsonResource
             'phone' => $this->phone,
             'is_active' => (bool) $this->is_active,
             'is_super_admin' => $this->isSuperAdmin(),
+            'two_factor_enabled' => $this->hasTwoFactorEnabled(),
+            'two_factor_confirmed_at' => $this->two_factor_confirmed_at?->toIso8601String(),
             'roles' => RoleResource::collection($this->whenLoaded('roles')),
             'permissions' => $this->effectivePermissions()->values()->all(),
             'created_at' => $this->created_at?->toIso8601String(),

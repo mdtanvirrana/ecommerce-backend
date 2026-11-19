@@ -9,12 +9,14 @@ use App\Http\Requests\Auth\LoginRequest;
 use App\Http\Requests\Auth\ResetPasswordRequest;
 use App\Http\Requests\Auth\UpdateProfileRequest;
 use App\Http\Resources\CustomerResource;
+use App\Mail\VerifyCustomerEmailMail;
 use App\Models\Customer;
 use App\Support\ApiResponse;
 use Illuminate\Auth\Events\PasswordReset;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Password;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Str;
@@ -40,10 +42,88 @@ class CustomerAuthController extends Controller
 
         $token = $customer->createToken('customer-auth', ['customer'])->plainTextToken;
 
+        $this->queueVerificationEmail($customer);
+
         return ApiResponse::success([
             'user' => new CustomerResource($customer),
             'token' => $token,
-        ], 'Registration successful.', 201);
+        ], 'Registration successful. Please check your email to verify your account.', 201);
+    }
+
+    public function verifyEmail(Request $request, int $id, string $hash): JsonResponse
+    {
+        $expires = (int) $request->query('expires', 0);
+        $signature = (string) $request->query('signature', '');
+
+        if ($expires < time()) {
+            return ApiResponse::error('Verification link has expired. Please request a new one.', 403);
+        }
+
+        $expectedSignature = $this->signVerificationPayload($id, $hash, $expires);
+        if ($signature === '' || ! hash_equals($expectedSignature, $signature)) {
+            return ApiResponse::error('Invalid email verification signature.', 403);
+        }
+
+        /** @var Customer|null $customer */
+        $customer = Customer::query()->find($id);
+        if ($customer === null || ! hash_equals(sha1(strtolower($customer->email)), $hash)) {
+            return ApiResponse::error('Invalid email verification link.', 403);
+        }
+
+        if ($customer->email_verified_at === null) {
+            $customer->forceFill(['email_verified_at' => now()])->save();
+        }
+
+        return ApiResponse::success(
+            new CustomerResource($customer->fresh()),
+            'Email address verified successfully.'
+        );
+    }
+
+    public function resendVerificationEmail(Request $request): JsonResponse
+    {
+        /** @var Customer $customer */
+        $customer = $request->user('customer');
+
+        if ($customer->email_verified_at !== null) {
+            return ApiResponse::success(
+                new CustomerResource($customer),
+                'Email address is already verified.'
+            );
+        }
+
+        $this->queueVerificationEmail($customer);
+
+        return ApiResponse::success(
+            null,
+            'A fresh verification link has been sent to your email address.'
+        );
+    }
+
+    public function buildVerificationUrl(Customer $customer, ?int $expires = null): string
+    {
+        $expiresAt = $expires ?? (time() + 3600);
+        $hash = sha1(strtolower($customer->email));
+        $signature = $this->signVerificationPayload($customer->id, $hash, $expiresAt);
+        $frontendUrl = rtrim((string) config('services.frontend.url', 'http://localhost:3000'), '/');
+
+        return $frontendUrl.'/verify-email?'.http_build_query([
+            'id' => $customer->id,
+            'hash' => $hash,
+            'expires' => $expiresAt,
+            'signature' => $signature,
+        ]);
+    }
+
+    private function queueVerificationEmail(Customer $customer): void
+    {
+        $url = $this->buildVerificationUrl($customer);
+        Mail::to($customer->email)->queue(new VerifyCustomerEmailMail($customer, $url));
+    }
+
+    private function signVerificationPayload(int $id, string $hash, int $expires): string
+    {
+        return hash_hmac('sha256', "{$id}|{$hash}|{$expires}", (string) config('app.key'));
     }
 
     public function login(LoginRequest $request): JsonResponse

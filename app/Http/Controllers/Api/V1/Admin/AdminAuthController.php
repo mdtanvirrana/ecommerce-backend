@@ -14,6 +14,7 @@ use App\Support\ApiResponse;
 use Illuminate\Auth\Events\PasswordReset;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Password;
 use Illuminate\Support\Facades\RateLimiter;
@@ -54,9 +55,20 @@ class AdminAuthController extends Controller
 
         RateLimiter::clear($throttleKey);
 
+        if ($staff->hasTwoFactorEnabled()) {
+            $challengeToken = Str::random(64);
+            Cache::put("admin_2fa:{$challengeToken}", $staff->id, now()->addMinutes(5));
+
+            return ApiResponse::success([
+                'requires_two_factor' => true,
+                'two_factor_token' => $challengeToken,
+            ], 'Two-factor authentication code required.');
+        }
+
         $token = $staff->createToken('admin-auth', ['staff'])->plainTextToken;
 
         return ApiResponse::success([
+            'requires_two_factor' => false,
             'staff' => new StaffResource($staff),
             'token' => $token,
         ], 'Staff login successful.');

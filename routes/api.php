@@ -9,6 +9,7 @@ use App\Http\Controllers\Api\V1\Admin\AdminProductController;
 use App\Http\Controllers\Api\V1\Admin\AdminReviewController;
 use App\Http\Controllers\Api\V1\Admin\AdminRoleController;
 use App\Http\Controllers\Api\V1\Admin\AdminStaffController;
+use App\Http\Controllers\Api\V1\Admin\AdminTwoFactorController;
 use App\Http\Controllers\Api\V1\Admin\DashboardController;
 use App\Http\Controllers\Api\V1\CartController;
 use App\Http\Controllers\Api\V1\CategoryController;
@@ -39,6 +40,7 @@ Route::prefix('v1')->group(function (): void {
     // Customer Auth (public)
     Route::post('/register', [CustomerAuthController::class, 'register'])->middleware('throttle:10,1');
     Route::post('/login', [CustomerAuthController::class, 'login']);
+    Route::get('/email/verify/{id}/{hash}', [CustomerAuthController::class, 'verifyEmail'])->middleware('throttle:15,1');
     Route::post('/password/forgot', [CustomerAuthController::class, 'forgotPassword'])->middleware('throttle:5,1');
     Route::post('/password/reset', [CustomerAuthController::class, 'resetPassword'])->middleware('throttle:5,1');
 
@@ -47,6 +49,8 @@ Route::prefix('v1')->group(function (): void {
         Route::post('/logout', [CustomerAuthController::class, 'logout']);
         Route::get('/me', [CustomerAuthController::class, 'me']);
         Route::patch('/me', [CustomerAuthController::class, 'updateProfile']);
+        Route::post('/email/verification-notification', [CustomerAuthController::class, 'resendVerificationEmail'])
+            ->middleware('throttle:6,1');
 
         // Shopping Cart (persistent MySQL)
         Route::get('/cart', [CartController::class, 'show']);
@@ -73,6 +77,7 @@ Route::prefix('v1')->group(function (): void {
     // Admin / Staff Auth (public)
     Route::prefix('admin')->group(function (): void {
         Route::post('/login', [AdminAuthController::class, 'login']);
+        Route::post('/two-factor/challenge', [AdminTwoFactorController::class, 'challenge'])->middleware('throttle:10,1');
         Route::post('/password/forgot', [AdminAuthController::class, 'forgotPassword'])->middleware('throttle:5,1');
         Route::post('/password/reset', [AdminAuthController::class, 'resetPassword'])->middleware('throttle:5,1');
 
@@ -82,6 +87,10 @@ Route::prefix('v1')->group(function (): void {
             Route::get('/me', [AdminAuthController::class, 'me']);
             Route::patch('/profile', [AdminAuthController::class, 'updateProfile']);
             Route::put('/profile/password', [AdminAuthController::class, 'updatePassword']);
+            Route::post('/two-factor/setup', [AdminTwoFactorController::class, 'setup']);
+            Route::post('/two-factor/confirm', [AdminTwoFactorController::class, 'confirm']);
+            Route::post('/two-factor/disable', [AdminTwoFactorController::class, 'disable']);
+            Route::post('/two-factor/recovery-codes', [AdminTwoFactorController::class, 'regenerateRecoveryCodes']);
 
             // Dashboard
             Route::get('/dashboard', [DashboardController::class, 'index'])
