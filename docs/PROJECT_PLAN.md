@@ -1,0 +1,36 @@
+# Nocfinity Full-Stack E-Commerce — Project Plan
+
+## 1. Workspace Audit Summary
+
+| Area | Current State |
+|---|---|
+| Backend (`ecommerce-backend/`) | Laravel `^13.17` on PHP `8.4.27`, Composer `2.8.11`, Pest `^5.3`, Pint `^1.27`. Default skeleton only (`User` model, `users`/`cache`/`jobs` migrations, SQLite default in `.env`). Missing `laravel/sanctum`, `stripe/stripe-php`, MySQL config, API routes, RBAC, catalog, cart, checkout, Stripe, orders, and admin modules. |
+| Frontend (`ecommerce-frontend/`) | Next.js `16.4.6` (App Router, `cacheComponents: true`, `partialPrefetching: true`), React `19.3.0`, TypeScript 5, Tailwind CSS `4.3.3` (`@tailwindcss/turbopack`). Default `create-next-app` starter page. Missing `lucide-react`, `react-hook-form`, `zod`, `@tanstack/react-query`, `recharts`, `@stripe/stripe-js`, `@stripe/react-stripe-js`, `shadcn/ui` components, API client, storefront, and admin panel. |
+| Visual Reference (`figma/`) | 8 complete screenshots (`SHOP.CO` storefront): Desktop (`1440px`) and Mobile (`390px`) for Homepage, Category Page, Product Detail Page, and Cart Page. |
+| Database / Tools | MySQL `8.0.46` installed and running locally. PHP extensions available: `pdo_mysql`, `bcmath`, `gd`, `curl`, `mbstring`, `openssl`. |
+
+## 2. Core Architectural Decisions
+
+1. **Strict Headless Separation**: Next.js communicates with Laravel exclusively via RESTful JSON APIs (`/api/v1/*`). Zero business logic in Next.js. Laravel is the single source of truth for pricing, coupons, shipping, inventory, orders, payments, auth, and authorization.
+2. **Secure Token Handling (No `localStorage` tokens)**: Next.js thin BFF Route Handlers (`/api/auth/*`, `/api/admin-auth/*`, `/api/backend/[...path]`) store Sanctum tokens in `HttpOnly`, `SameSite=Lax` cookies (`shop_customer_token` and `shop_admin_token`), completely preventing XSS token theft and allowing simultaneous customer & staff sessions. Direct Bearer token auth also works on Laravel `/api/v1/*` for API testing and Postman.
+3. **Separate Customer & Staff Authentication Guards**:
+   - Customer guard: `sanctum` / `customer` operating on `User` (`type = 'customer'`), tokens scoped with ability `['customer']`.
+   - Staff guard: dedicated `admin` guard (`config/auth.php`) operating on `Staff` (or dedicated guard provider backed by `users` where `type = 'staff'`, enforced via `AdminGuard` / `EnsureStaffUser` middleware and Sanctum token ability `['staff']`). Using a dedicated `admins` / `staff` provider or `users` table with `user_type` column keeps `role_user` directly aligned with the required `users` + `role_user` schema while enforcing strict guard isolation so customer tokens can NEVER access staff routes and vice versa.
+4. **Database-Driven RBAC**: Exact required tables (`roles`, `permissions`, `role_user`, `permission_role`), 5 default roles (`Super Admin`, `Admin`, `Product Manager`, `Order Manager`, `Support`), 26 granular permissions, permission middleware (`permission:products.create`), Laravel Policies, Super Admin protection (cannot be deleted or stripped of permissions), and dynamic frontend visibility.
+5. **Exact Monetary Math**: `DECIMAL(12,2)` columns in MySQL and PHP `bcmath` (`Money` helper) for all price, discount, shipping, and total calculations — zero floating-point arithmetic.
+6. **Overselling Prevention & Stripe Integrity**:
+   - Pending order created with server-computed totals and Stripe `PaymentIntent`.
+   - Stock is NEVER decremented before verified Stripe payment confirmation.
+   - Webhook handler verifies Stripe signature (`Webhook::constructEvent`), checks idempotency via `webhook_events.stripe_event_id` unique constraint, re-verifies PaymentIntent amount/currency/status via Stripe server API, then runs a DB transaction acquiring `SELECT ... FOR UPDATE` (`lockForUpdate()`) on ordered product IDs (sorted ascending to avoid deadlocks).
+   - If payment succeeds after stock becomes unavailable, payment is recorded, order is flagged `needs_resolution` / refunded safely via Stripe API (never silently fulfilled or left negative).
+   - Cancelling a paid order restores stock atomically exactly once (`stock_restored_at` guard inside `lockForUpdate()` transaction).
+
+## 3. Phased Implementation Roadmap
+
+- **Phase 1 — Discovery & Architecture (Current)**: Read `Project Details.pdf`, inspect all 8 `figma/` screenshots, audit backend/frontend, produce `PROJECT_PLAN.md`, `DATABASE_DESIGN.md`, `API_DOCUMENTATION.md`, `FIGMA_DESIGN_SPEC.md`, `ASSESSMENT_CHECKLIST.md`, extract Figma product/hero/dress-style assets.
+- **Phase 2 — Backend Core (Setup, Schema, Auth, RBAC, Catalog)**: Install Sanctum & Stripe SDK, configure MySQL 8 & CORS & security headers, create all migrations & seeders (24 products with real cropped Figma assets, 2-level categories, 5 roles, 26 permissions, Super Admin, sample staff/customers/coupons/orders), implement Customer & Staff auth (rate limiting, bcrypt, password reset), RBAC middleware + Policies + Role/Staff CRUD, Public & Admin Product/Category CRUD with multi-image upload.
+- **Phase 3 — Backend Commerce (Cart, Coupons, Checkout, Stripe, Orders, Inventory, Mail, Dashboard)**: Persistent MySQL cart + guest cart merge, full coupon validation engine, checkout + Stripe PaymentIntent + Webhook + Server-side reconciliation, concurrency-safe order numbers (`ORD-YYYY-NNNNNN`), `lockForUpdate()` stock deduction & single-execution cancellation restoration, strict order lifecycle transitions, queued Mailables (OrderConfirmed, PaymentSucceeded, OrderStatusUpdated, OrderCancelled, RefundProcessed), Admin Dashboard analytics & Customer/Order APIs.
+- **Phase 4 — Storefront UI (Strict Figma `SHOP.CO` Match)**: Install frontend packages & `shadcn/ui`, build secure cookie-based auth & API client, implement Homepage, Category/Shop Listing (search, price/color/size/category filters, sorting, server-side pagination), Product Detail (gallery, SKU, stock, variants, reviews, related products), Cart (qty, remove, coupon, summary), Checkout + Stripe Elements, Order Confirmation & History, Customer Auth pages, Desktop (`1440px`) + Mobile (`390px`) responsive verification.
+- **Phase 5 — Admin Panel UI**: Responsive `shadcn/ui` admin shell (permission-filtered sidebar, breadcrumbs, dark mode bonus, toasts, skeletons, dialogs), Dashboard with live DB stats + Recharts 30-day sales chart + recent orders, full CRUD for Products (multi-image upload), Categories (2-level tree), Orders (details, status updates, cancellation), Coupons, Customers, Staff, Roles & Permissions Matrix (Super Admin protection), Profile & password management.
+- **Phase 6 — Testing, Security Audit & Visual Verification**: Comprehensive Pest feature/unit test suite covering auth, rate limiting, RBAC, Super Admin protection, catalog, cart, coupons, price tampering, Stripe webhook signature/idempotency/verification, inventory locking/concurrency, single stock restoration, order ownership (IDOR), status transitions, email notifications; plus frontend build, lint, live server verification, and Figma screenshot comparison.
+- **Phase 7 — Documentation & Git Hygiene**: Complete `README.md`, `ARCHITECTURE.md`, updated `API_DOCUMENTATION.md`, `FIGMA_DESIGN_SPEC.md`, and verified `ASSESSMENT_CHECKLIST.md`, clean meaningful commits across milestones.
