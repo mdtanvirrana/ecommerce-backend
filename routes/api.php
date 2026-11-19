@@ -6,6 +6,7 @@ use App\Http\Controllers\Api\V1\Admin\AdminCouponController;
 use App\Http\Controllers\Api\V1\Admin\AdminCustomerController;
 use App\Http\Controllers\Api\V1\Admin\AdminOrderController;
 use App\Http\Controllers\Api\V1\Admin\AdminProductController;
+use App\Http\Controllers\Api\V1\Admin\AdminReviewController;
 use App\Http\Controllers\Api\V1\Admin\AdminRoleController;
 use App\Http\Controllers\Api\V1\Admin\AdminStaffController;
 use App\Http\Controllers\Api\V1\Admin\DashboardController;
@@ -16,13 +17,16 @@ use App\Http\Controllers\Api\V1\CouponController;
 use App\Http\Controllers\Api\V1\CustomerAuthController;
 use App\Http\Controllers\Api\V1\OrderController;
 use App\Http\Controllers\Api\V1\ProductController;
+use App\Http\Controllers\Api\V1\ReviewController;
 use App\Http\Controllers\Api\V1\StripeWebhookController;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('v1')->group(function (): void {
-    // Public Storefront Catalog
+    // Public Storefront Catalog & Reviews
     Route::get('/products', [ProductController::class, 'index']);
     Route::get('/products/{slug}', [ProductController::class, 'show']);
+    Route::get('/products/{slug}/reviews', [ReviewController::class, 'index']);
+    Route::get('/reviews/featured', [ReviewController::class, 'featured']);
     Route::get('/categories', [CategoryController::class, 'index']);
     Route::get('/categories/{slug}', [CategoryController::class, 'show']);
 
@@ -61,6 +65,9 @@ Route::prefix('v1')->group(function (): void {
         // Customer Orders (strictly scoped to owner via OrderPolicy)
         Route::get('/orders', [OrderController::class, 'index']);
         Route::get('/orders/{order}', [OrderController::class, 'show']);
+
+        // Customer Product Review Submission
+        Route::post('/products/{slug}/reviews', [ReviewController::class, 'store']);
     });
 
     // Admin / Staff Auth (public)
@@ -103,10 +110,18 @@ Route::prefix('v1')->group(function (): void {
                 ->middleware('permission:categories.create');
             Route::get('/categories/{category}', [AdminCategoryController::class, 'show'])
                 ->middleware('permission:categories.view');
-            Route::put('/categories/{category}', [AdminCategoryController::class, 'update'])
+            Route::match(['put', 'patch', 'post'], '/categories/{category}', [AdminCategoryController::class, 'update'])
                 ->middleware('permission:categories.edit');
             Route::delete('/categories/{category}', [AdminCategoryController::class, 'destroy'])
                 ->middleware('permission:categories.delete');
+
+            // Reviews & Ratings Management
+            Route::get('/reviews', [AdminReviewController::class, 'index'])
+                ->middleware('permission:reviews.view');
+            Route::patch('/reviews/{review}', [AdminReviewController::class, 'update'])
+                ->middleware('permission:reviews.manage');
+            Route::delete('/reviews/{review}', [AdminReviewController::class, 'destroy'])
+                ->middleware('permission:reviews.delete');
 
             // Orders Management
             Route::get('/orders', [AdminOrderController::class, 'index'])

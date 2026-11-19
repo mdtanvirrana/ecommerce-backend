@@ -12,6 +12,7 @@ class DatabaseSeeder extends Seeder
             RbacSeeder::class,
             CatalogSeeder::class,
             DemoCommerceSeeder::class,
+            ReviewSeeder::class,
         ]);
     }
 }

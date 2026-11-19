@@ -59,6 +59,11 @@ class RbacSeeder extends Seeder
                 'roles.delete' => 'Delete custom roles',
                 'permissions.assign' => 'Assign permissions to roles',
             ],
+            'reviews' => [
+                'reviews.view' => 'View customer product reviews and ratings',
+                'reviews.manage' => 'Approve, feature, or edit product reviews',
+                'reviews.delete' => 'Delete product reviews',
+            ],
         ];
 
         $permissionMap = [];
@@ -88,6 +93,7 @@ class RbacSeeder extends Seeder
                     'coupons.view', 'coupons.create', 'coupons.edit', 'coupons.delete', 'coupons.manage',
                     'customers.view', 'customers.view_orders',
                     'reports.view', 'reports.export',
+                    'reviews.view', 'reviews.manage', 'reviews.delete',
                     'staff.view', 'roles.view',
                 ],
             ],
@@ -97,6 +103,7 @@ class RbacSeeder extends Seeder
                 'permissions' => [
                     'products.view', 'products.create', 'products.edit', 'products.delete', 'products.update_stock',
                     'categories.view', 'categories.create', 'categories.edit', 'categories.delete',
+                    'reviews.view', 'reviews.manage',
                     'reports.view',
                 ],
             ],
@@ -115,7 +122,7 @@ class RbacSeeder extends Seeder
                 'permissions' => [
                     'orders.view',
                     'customers.view', 'customers.view_orders',
-                    'products.view', 'categories.view', 'coupons.view',
+                    'products.view', 'categories.view', 'coupons.view', 'reviews.view',
                 ],
             ],
         ];

@@ -23,12 +23,23 @@ class CatalogSeeder extends Seeder
             }
         }
 
+        // Ensure bundled Figma seed category images exist in public storage disk on fresh clones.
+        $catAssetsDir = database_path('seeders/assets/categories');
+        if (File::isDirectory($catAssetsDir)) {
+            foreach (File::files($catAssetsDir) as $file) {
+                $targetPath = 'categories/'.$file->getFilename();
+                if (! Storage::disk('public')->exists($targetPath)) {
+                    Storage::disk('public')->put($targetPath, File::get($file->getPathname()));
+                }
+            }
+        }
+
         // Level 1 Parent Categories (Dress Styles matching Figma)
         $parents = [
-            'casual' => ['name' => 'Casual', 'description' => 'Everyday essentials designed for effortless comfort and modern street style.', 'sort_order' => 1],
-            'formal' => ['name' => 'Formal', 'description' => 'Sharp tailored shirts, blazers, and trousers for polished occasions.', 'sort_order' => 2],
-            'party' => ['name' => 'Party', 'description' => 'Standout polos, statement jackets, and evening pieces crafted to impress.', 'sort_order' => 3],
-            'gym' => ['name' => 'Gym', 'description' => 'Breathable athletic wear built for training and active movement.', 'sort_order' => 4],
+            'casual' => ['name' => 'Casual', 'description' => 'Everyday essentials designed for effortless comfort and modern street style.', 'sort_order' => 1, 'image_path' => 'categories/style-casual.jpg'],
+            'formal' => ['name' => 'Formal', 'description' => 'Sharp tailored shirts, blazers, and trousers for polished occasions.', 'sort_order' => 2, 'image_path' => 'categories/style-formal.jpg'],
+            'party' => ['name' => 'Party', 'description' => 'Standout polos, statement jackets, and evening pieces crafted to impress.', 'sort_order' => 3, 'image_path' => 'categories/style-party.jpg'],
+            'gym' => ['name' => 'Gym', 'description' => 'Breathable athletic wear built for training and active movement.', 'sort_order' => 4, 'image_path' => 'categories/style-gym.jpg'],
         ];
 
         $categoryMap = [];
@@ -39,6 +50,7 @@ class CatalogSeeder extends Seeder
                     'parent_id' => null,
                     'name' => $data['name'],
                     'description' => $data['description'],
+                    'image_path' => $data['image_path'],
                     'sort_order' => $data['sort_order'],
                     'is_active' => true,
                 ]

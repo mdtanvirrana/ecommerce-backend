@@ -182,3 +182,53 @@ it('throttles staff login after 5 failed attempts and validates password update'
         'password_confirmation' => 'NewStrongPass@123!',
     ])->assertOk();
 });
+
+it('supports category image upload and dynamic product reviews with exact count sync and admin moderation', function (): void {
+    Storage::fake('public');
+
+    $admin = Staff::query()->where('email', 'superadmin@shopco.local')->firstOrFail();
+    $adminToken = $admin->createToken('admin-auth', ['staff'])->plainTextToken;
+
+    // Create category with image upload
+    $catRes = $this->withToken($adminToken)->post('/api/v1/admin/categories', [
+        'name' => 'Streetwear Capsule',
+        'description' => 'Limited drops',
+        'image' => UploadedFile::fake()->image('streetwear.jpg', 400, 300),
+    ], ['Accept' => 'application/json'])->assertCreated();
+
+    expect($catRes->json('data.image_url'))->not->toBeNull();
+
+    // Customer submits review -> exact reviews_count synced
+    $customer = Customer::query()->where('email', 'customer@shopco.local')->firstOrFail();
+    $custToken = $customer->createToken('customer-auth', ['customer'])->plainTextToken;
+    $product = Product::query()->where('slug', 't-shirt-with-tape-details')->firstOrFail();
+
+    auth()->forgetGuards();
+    $reviewRes = $this->withToken($custToken)->postJson("/api/v1/products/{$product->slug}/reviews", [
+        'rating' => 5,
+        'comment' => 'Amazing heavyweight cotton tee with great fit and clean tape detail!',
+    ])->assertCreated();
+
+    $reviewId = $reviewRes->json('data.id');
+
+    $listRes = $this->getJson("/api/v1/products/{$product->slug}/reviews?per_page=3")->assertOk();
+    expect($listRes->json('meta.total'))->toBe(1);
+    expect($product->fresh()->reviews_count)->toBe(1);
+
+    // Admin lists, features, and deletes review -> count returns to 0
+    auth()->forgetGuards();
+    $this->withToken($adminToken)->getJson('/api/v1/admin/reviews')
+        ->assertOk()
+        ->assertJsonPath('data.summary.total_reviews', 1);
+
+    $this->withToken($adminToken)->patchJson("/api/v1/admin/reviews/{$reviewId}", [
+        'is_featured' => true,
+        'is_approved' => true,
+    ])->assertOk()->assertJsonPath('data.is_featured', true);
+
+    $this->getJson('/api/v1/reviews/featured')->assertOk()->assertJsonCount(1, 'data');
+
+    auth()->forgetGuards();
+    $this->withToken($adminToken)->deleteJson("/api/v1/admin/reviews/{$reviewId}")->assertOk();
+    expect($product->fresh()->reviews_count)->toBe(0);
+});

@@ -11,6 +11,7 @@ use App\Models\Category;
 use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 class AdminCategoryController extends Controller
@@ -47,6 +48,11 @@ class AdminCategoryController extends Controller
             ? Str::slug((string) $data['slug'])
             : $this->uniqueSlug((string) $data['name']);
 
+        unset($data['image']);
+        if ($request->hasFile('image')) {
+            $data['image_path'] = $request->file('image')->store('categories', 'public');
+        }
+
         $category = Category::query()->create($data);
 
         return ApiResponse::success(
@@ -68,7 +74,8 @@ class AdminCategoryController extends Controller
         $data = $request->validated();
 
         if (array_key_exists('parent_id', $data)) {
-            $candidateParentId = $data['parent_id'] !== null ? (int) $data['parent_id'] : null;
+            $candidateParentId = $data['parent_id'] !== null && $data['parent_id'] !== '' ? (int) $data['parent_id'] : null;
+            $data['parent_id'] = $candidateParentId;
             if ($category->wouldCreateCycle($candidateParentId)) {
                 throw new DomainException(
                     'Invalid parent category: circular parent-child relationship is not allowed.',
@@ -80,6 +87,21 @@ class AdminCategoryController extends Controller
 
         if (isset($data['slug']) && trim((string) $data['slug']) !== '') {
             $data['slug'] = Str::slug((string) $data['slug']);
+        }
+
+        $removeImage = $request->boolean('remove_image');
+        unset($data['image'], $data['remove_image']);
+
+        if ($request->hasFile('image')) {
+            if ($category->image_path && ! str_starts_with($category->image_path, 'http')) {
+                Storage::disk('public')->delete($category->image_path);
+            }
+            $data['image_path'] = $request->file('image')->store('categories', 'public');
+        } elseif ($removeImage && $category->image_path) {
+            if (! str_starts_with($category->image_path, 'http')) {
+                Storage::disk('public')->delete($category->image_path);
+            }
+            $data['image_path'] = null;
         }
 
         $category->update($data);
@@ -98,6 +120,10 @@ class AdminCategoryController extends Controller
 
         if ($category->products()->exists()) {
             throw new DomainException('Cannot delete a category that still has assigned products.', 409);
+        }
+
+        if ($category->image_path && ! str_starts_with($category->image_path, 'http')) {
+            Storage::disk('public')->delete($category->image_path);
         }
 
         $category->delete();

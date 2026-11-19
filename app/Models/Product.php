@@ -81,6 +81,14 @@ class Product extends Model
     }
 
     /**
+     * @return HasMany<Review, $this>
+     */
+    public function reviews(): HasMany
+    {
+        return $this->hasMany(Review::class);
+    }
+
+    /**
      * Server-side authoritative unit price (discount_price if valid and lower than regular_price).
      */
     public function effectivePrice(): string
