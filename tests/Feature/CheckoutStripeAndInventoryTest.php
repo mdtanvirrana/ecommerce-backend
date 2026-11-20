@@ -261,3 +261,80 @@ it('restores stock strictly once on cancellation, validates lifecycle transition
     $this->withToken($adminToken)->postJson("/api/v1/admin/orders/{$orderId}/cancel")->assertStatus(409);
     expect($product->fresh()->stock_quantity)->toBe($initialStock);
 });
+
+it('allows authorized staff to update order payment status with atomic stock deduction, guardrails, and refund syncing', function (): void {
+    Mail::fake();
+
+    $customerToken = $this->postJson('/api/v1/login', [
+        'email' => 'customer@shopco.local',
+        'password' => 'Customer@123!',
+    ])->json('data.token');
+
+    $adminToken = $this->postJson('/api/v1/admin/login', [
+        'email' => 'orders@shopco.local',
+        'password' => 'Staff@123!',
+    ])->json('data.token');
+
+    $supportToken = $this->postJson('/api/v1/admin/login', [
+        'email' => 'support@shopco.local',
+        'password' => 'Staff@123!',
+    ])->json('data.token');
+
+    $product = Product::query()->where('stock_quantity', '>=', 5)->firstOrFail();
+    $initialStock = $product->stock_quantity;
+
+    // Customer creates a pending order
+    auth()->forgetGuards();
+    $this->withToken($customerToken)->postJson('/api/v1/cart/items', [
+        'product_id' => $product->id,
+        'quantity' => 2,
+    ])->assertCreated();
+
+    $co = $this->withToken($customerToken)->postJson('/api/v1/checkout', [
+        'shipping_full_name' => 'Sarah Miller',
+        'shipping_email' => 'customer@shopco.local',
+        'shipping_phone' => '+1-555-0201',
+        'shipping_address' => '210 Fifth Ave',
+        'shipping_city' => 'New York',
+        'shipping_postal_code' => '10010',
+    ])->assertCreated();
+
+    $orderId = $co->json('data.order.id');
+
+    // Support role lacks orders.update_status -> 403
+    auth()->forgetGuards();
+    $this->withToken($supportToken)->patchJson("/api/v1/admin/orders/{$orderId}/payment-status", [
+        'payment_status' => 'succeeded',
+    ])->assertForbidden();
+
+    // Cannot refund an unpaid pending order -> 409
+    auth()->forgetGuards();
+    $this->withToken($adminToken)->patchJson("/api/v1/admin/orders/{$orderId}/payment-status", [
+        'payment_status' => 'refunded',
+    ])->assertStatus(409);
+
+    // Mark payment succeeded -> deducts stock atomically & advances order status pending -> paid
+    $paidRes = $this->withToken($adminToken)->patchJson("/api/v1/admin/orders/{$orderId}/payment-status", [
+        'payment_status' => 'succeeded',
+        'note' => 'Verified offline bank settlement',
+    ]);
+
+    $paidRes->assertOk()
+        ->assertJsonPath('data.payment_status', 'succeeded')
+        ->assertJsonPath('data.status', 'paid');
+
+    expect($product->fresh()->stock_quantity)->toBe($initialStock - 2);
+    Mail::assertQueued(PaymentSucceededMail::class, 1);
+    Mail::assertQueued(OrderConfirmedMail::class, 1);
+
+    // Mark payment refunded -> syncs order & payment record + queues refund email
+    $refundRes = $this->withToken($adminToken)->patchJson("/api/v1/admin/orders/{$orderId}/payment-status", [
+        'payment_status' => 'refunded',
+        'note' => 'Manual refund issued by ops',
+    ]);
+
+    $refundRes->assertOk()
+        ->assertJsonPath('data.payment_status', 'refunded');
+
+    Mail::assertQueued(RefundProcessedMail::class, 1);
+});

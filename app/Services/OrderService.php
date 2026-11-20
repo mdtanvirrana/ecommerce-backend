@@ -5,7 +5,9 @@ namespace App\Services;
 use App\Enums\OrderStatus;
 use App\Enums\PaymentStatus;
 use App\Events\OrderCancelled;
+use App\Events\OrderConfirmed;
 use App\Events\OrderStatusUpdated;
+use App\Events\PaymentSucceeded;
 use App\Events\RefundProcessed;
 use App\Exceptions\DomainException;
 use App\Models\ActivityLog;
@@ -72,6 +74,161 @@ class OrderService
 
         if ($previousStatus !== $newStatus) {
             event(new OrderStatusUpdated($updated, $previousStatus));
+        }
+
+        return $updated;
+    }
+
+    /**
+     * Update an order's payment status with transactional stock safety,
+     * payment record syncing, and activity audit logging.
+     */
+    public function updatePaymentStatus(
+        Order $order,
+        PaymentStatus $newPaymentStatus,
+        Staff $actor,
+        ?string $note = null,
+    ): Order {
+        $previousOrderStatus = $order->status;
+        $previousPaymentStatus = $order->payment_status;
+        $syncedPayment = null;
+
+        /** @var Order $updated */
+        $updated = DB::transaction(function () use (
+            $order,
+            $newPaymentStatus,
+            $actor,
+            $note,
+            &$previousOrderStatus,
+            &$previousPaymentStatus,
+            &$syncedPayment
+        ): Order {
+            /** @var Order $locked */
+            $locked = Order::query()->whereKey($order->id)->lockForUpdate()->firstOrFail();
+            $previousOrderStatus = $locked->status;
+            $previousPaymentStatus = $locked->payment_status;
+
+            if ($locked->payment_status === $newPaymentStatus) {
+                return $locked->fresh(['items', 'payments', 'user']);
+            }
+
+            // Prevent nonsensical payment rollbacks on delivered orders
+            if (
+                $locked->status === OrderStatus::Delivered &&
+                in_array($newPaymentStatus, [PaymentStatus::Pending, PaymentStatus::Failed, PaymentStatus::Cancelled], true)
+            ) {
+                throw new DomainException(
+                    "Cannot change payment status of a delivered order to '{$newPaymentStatus->value}'.",
+                    409
+                );
+            }
+
+            // Refunded requires a prior succeeded or needs_resolution payment
+            if (
+                $newPaymentStatus === PaymentStatus::Refunded &&
+                ! in_array($locked->payment_status, [PaymentStatus::Succeeded, PaymentStatus::NeedsResolution], true)
+            ) {
+                throw new DomainException(
+                    'Only paid orders can be marked as refunded.',
+                    409
+                );
+            }
+
+            // Cancelled orders cannot transition back to succeeded payment
+            if ($locked->status === OrderStatus::Cancelled && $newPaymentStatus === PaymentStatus::Succeeded) {
+                throw new DomainException(
+                    'Cancelled orders cannot be marked as paid.',
+                    409
+                );
+            }
+
+            /** @var Payment|null $latestPayment */
+            $latestPayment = $locked->payments()->latest('id')->first();
+
+            if ($newPaymentStatus === PaymentStatus::Succeeded) {
+                // Atomically validate and deduct stock with row locks (idempotent if already deducted)
+                $this->inventoryService->deductForOrder($locked);
+
+                $updateFields = [
+                    'payment_status' => PaymentStatus::Succeeded,
+                    'paid_at' => $locked->paid_at ?? now(),
+                ];
+
+                if ($locked->status === OrderStatus::Pending) {
+                    $updateFields['status'] = OrderStatus::Paid;
+                }
+
+                $locked->update($updateFields);
+
+                if ($latestPayment !== null) {
+                    $latestPayment->update([
+                        'status' => PaymentStatus::Succeeded,
+                        'paid_at' => $latestPayment->paid_at ?? now(),
+                        'failure_code' => null,
+                        'failure_message' => null,
+                    ]);
+                    $syncedPayment = $latestPayment->fresh();
+                } else {
+                    $syncedPayment = Payment::query()->create([
+                        'order_id' => $locked->id,
+                        'provider' => 'manual',
+                        'status' => PaymentStatus::Succeeded,
+                        'amount' => $locked->total_amount,
+                        'currency' => $locked->currency,
+                        'paid_at' => now(),
+                    ]);
+                }
+            } elseif ($newPaymentStatus === PaymentStatus::Refunded) {
+                $locked->update(['payment_status' => PaymentStatus::Refunded]);
+
+                if ($latestPayment !== null) {
+                    $latestPayment->update([
+                        'status' => PaymentStatus::Refunded,
+                        'refunded_at' => $latestPayment->refunded_at ?? now(),
+                    ]);
+                    $syncedPayment = $latestPayment->fresh();
+                }
+            } else {
+                $locked->update(['payment_status' => $newPaymentStatus]);
+
+                if ($latestPayment !== null) {
+                    $paymentUpdate = ['status' => $newPaymentStatus];
+                    if ($newPaymentStatus === PaymentStatus::Failed && $note) {
+                        $paymentUpdate['failure_message'] = $note;
+                    }
+                    $latestPayment->update($paymentUpdate);
+                    $syncedPayment = $latestPayment->fresh();
+                }
+            }
+
+            ActivityLog::query()->create([
+                'actor_id' => $actor->id,
+                'action' => 'order.payment_status_updated',
+                'subject_type' => Order::class,
+                'subject_id' => $locked->id,
+                'properties' => [
+                    'from' => $previousPaymentStatus->value,
+                    'to' => $newPaymentStatus->value,
+                    'order_status_from' => $previousOrderStatus->value,
+                    'order_status_to' => $locked->status->value,
+                    'note' => $note,
+                ],
+            ]);
+
+            return $locked->fresh(['items', 'payments', 'user']);
+        });
+
+        if ($previousPaymentStatus !== $newPaymentStatus) {
+            if ($newPaymentStatus === PaymentStatus::Succeeded && $syncedPayment instanceof Payment) {
+                event(new PaymentSucceeded($updated, $syncedPayment));
+                if ($previousOrderStatus === OrderStatus::Pending && $updated->status === OrderStatus::Paid) {
+                    event(new OrderConfirmed($updated));
+                }
+            } elseif ($newPaymentStatus === PaymentStatus::Refunded && $syncedPayment instanceof Payment) {
+                event(new RefundProcessed($updated, $syncedPayment));
+            } elseif ($previousOrderStatus !== $updated->status) {
+                event(new OrderStatusUpdated($updated, $previousOrderStatus));
+            }
         }
 
         return $updated;

@@ -139,6 +139,8 @@ Route::prefix('v1')->group(function (): void {
                 ->middleware('permission:orders.view');
             Route::patch('/orders/{order}/status', [AdminOrderController::class, 'updateStatus'])
                 ->middleware('permission:orders.update_status');
+            Route::patch('/orders/{order}/payment-status', [AdminOrderController::class, 'updatePaymentStatus'])
+                ->middleware('permission:orders.update_status');
             Route::post('/orders/{order}/cancel', [AdminOrderController::class, 'cancel'])
                 ->middleware('permission:orders.cancel');
 

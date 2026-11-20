@@ -3,7 +3,9 @@
 namespace App\Http\Controllers\Api\V1\Admin;
 
 use App\Enums\OrderStatus;
+use App\Enums\PaymentStatus;
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Admin\UpdateOrderPaymentStatusRequest;
 use App\Http\Requests\Admin\UpdateOrderStatusRequest;
 use App\Http\Resources\OrderResource;
 use App\Models\Order;
@@ -72,6 +74,22 @@ class AdminOrderController extends Controller
         );
 
         return ApiResponse::success(new OrderResource($updated), 'Order status updated successfully.');
+    }
+
+    public function updatePaymentStatus(UpdateOrderPaymentStatusRequest $request, Order $order): JsonResponse
+    {
+        /** @var Staff $staff */
+        $staff = $request->user('admin');
+        $nextPaymentStatus = PaymentStatus::from((string) $request->validated('payment_status'));
+
+        $updated = $this->orderService->updatePaymentStatus(
+            order: $order,
+            newPaymentStatus: $nextPaymentStatus,
+            actor: $staff,
+            note: $request->validated('note'),
+        );
+
+        return ApiResponse::success(new OrderResource($updated), 'Payment status updated successfully.');
     }
 
     public function cancel(Request $request, Order $order): JsonResponse
