@@ -49,11 +49,16 @@ class OrderService
                 );
             }
 
-            if ($newStatus === OrderStatus::Paid && $locked->payment_status !== PaymentStatus::Succeeded) {
+            if ($newStatus->requiresPaidPayment() && $locked->payment_status !== PaymentStatus::Succeeded) {
                 throw new DomainException(
-                    'Orders can only transition to paid after server-verified Stripe payment.',
+                    "Orders can only transition to '{$newStatus->value}' after payment has succeeded.",
                     409
                 );
+            }
+
+            // Guarantee atomic stock deduction strictly once when advancing to paid/processing/shipped/delivered
+            if ($newStatus->requiresPaidPayment() && $locked->stock_deducted_at === null) {
+                $this->inventoryService->deductForOrder($locked);
             }
 
             $locked->update(['status' => $newStatus]);

@@ -231,24 +231,35 @@ it('restores stock strictly once on cancellation, validates lifecycle transition
     $this->withToken($t2)->getJson("/api/v1/orders/{$orderId}")->assertForbidden();
     $this->withToken($t2)->postJson("/api/v1/orders/{$orderId}/confirm-payment")->assertForbidden();
 
+    // Unpaid pending order cannot jump to shipped or delivered (409)
+    $this->withToken($adminToken)->patchJson("/api/v1/admin/orders/{$orderId}/status", [
+        'status' => 'shipped',
+    ])->assertStatus(409);
+
     // Customer 1 confirms paid order -> stock drops by 3
     $this->fakeStripe->markIntentSucceeded($piId);
     auth()->forgetGuards();
     $this->withToken($t1)->postJson("/api/v1/orders/{$orderId}/confirm-payment")->assertOk();
     expect($product->fresh()->stock_quantity)->toBe($initialStock - 3);
 
-    // Invalid lifecycle jump paid -> delivered rejected (409)
+    // Backward jump paid -> pending rejected (409)
     $this->withToken($adminToken)->patchJson("/api/v1/admin/orders/{$orderId}/status", [
-        'status' => 'delivered',
+        'status' => 'pending',
     ])->assertStatus(409);
 
-    // Valid transition paid -> processing succeeds and queues status mail
+    // Valid forward transitions paid -> processing -> shipped succeed and queue status mail (without double-deducting stock)
     $this->withToken($adminToken)->patchJson("/api/v1/admin/orders/{$orderId}/status", [
         'status' => 'processing',
     ])->assertOk()->assertJsonPath('data.status', 'processing');
-    Mail::assertQueued(OrderStatusChangedMail::class, 1);
 
-    // Cancel paid/processing order -> restores stock back to initialStock + queues cancel & refund mail
+    $this->withToken($adminToken)->patchJson("/api/v1/admin/orders/{$orderId}/status", [
+        'status' => 'shipped',
+    ])->assertOk()->assertJsonPath('data.status', 'shipped');
+
+    expect($product->fresh()->stock_quantity)->toBe($initialStock - 3);
+    Mail::assertQueued(OrderStatusChangedMail::class, 2);
+
+    // Cancel paid/shipped order -> restores stock back to initialStock + queues cancel & refund mail
     $this->withToken($adminToken)->postJson("/api/v1/admin/orders/{$orderId}/cancel", [
         'reason' => 'Customer requested cancellation',
     ])->assertOk()->assertJsonPath('data.status', 'cancelled');
@@ -257,8 +268,11 @@ it('restores stock strictly once on cancellation, validates lifecycle transition
     Mail::assertQueued(OrderCancelledMail::class, 1);
     Mail::assertQueued(RefundProcessedMail::class, 1);
 
-    // Second cancel attempt rejected (409) and stock is NOT restored twice
+    // Second cancel attempt & post-cancel jump to delivered rejected (409) and stock is NOT restored twice
     $this->withToken($adminToken)->postJson("/api/v1/admin/orders/{$orderId}/cancel")->assertStatus(409);
+    $this->withToken($adminToken)->patchJson("/api/v1/admin/orders/{$orderId}/status", [
+        'status' => 'delivered',
+    ])->assertStatus(409);
     expect($product->fresh()->stock_quantity)->toBe($initialStock);
 });
 
@@ -326,6 +340,23 @@ it('allows authorized staff to update order payment status with atomic stock ded
     expect($product->fresh()->stock_quantity)->toBe($initialStock - 2);
     Mail::assertQueued(PaymentSucceededMail::class, 1);
     Mail::assertQueued(OrderConfirmedMail::class, 1);
+
+    // Paid order can transition directly to shipped and delivered (stock remains deducted strictly once)
+    $this->withToken($adminToken)->patchJson("/api/v1/admin/orders/{$orderId}/status", [
+        'status' => 'shipped',
+    ])->assertOk()->assertJsonPath('data.status', 'shipped');
+
+    $this->withToken($adminToken)->patchJson("/api/v1/admin/orders/{$orderId}/status", [
+        'status' => 'delivered',
+    ])->assertOk()->assertJsonPath('data.status', 'delivered');
+
+    expect($product->fresh()->stock_quantity)->toBe($initialStock - 2);
+
+    // Delivered order is terminal: cannot cancel or go back to pending
+    $this->withToken($adminToken)->postJson("/api/v1/admin/orders/{$orderId}/cancel")->assertStatus(409);
+    $this->withToken($adminToken)->patchJson("/api/v1/admin/orders/{$orderId}/status", [
+        'status' => 'pending',
+    ])->assertStatus(409);
 
     // Mark payment refunded -> syncs order & payment record + queues refund email
     $refundRes = $this->withToken($adminToken)->patchJson("/api/v1/admin/orders/{$orderId}/payment-status", [
