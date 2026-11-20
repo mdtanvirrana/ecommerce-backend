@@ -63,6 +63,7 @@ Route::prefix('v1')->group(function (): void {
 
         // Checkout & Payments
         Route::post('/checkout', [CheckoutController::class, 'store']);
+        Route::post('/orders/{order}/validate-stock', [CheckoutController::class, 'validateStock']);
         Route::post('/orders/{order}/retry-payment', [CheckoutController::class, 'retryPayment']);
         Route::post('/orders/{order}/confirm-payment', [CheckoutController::class, 'confirmPayment']);
 

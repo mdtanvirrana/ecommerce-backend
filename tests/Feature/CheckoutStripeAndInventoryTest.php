@@ -369,3 +369,82 @@ it('allows authorized staff to update order payment status with atomic stock ded
 
     Mail::assertQueued(RefundProcessedMail::class, 1);
 });
+
+it('rejects checkout and pre-payment validation with clear messages when stock changes between add-to-cart and payment', function (): void {
+    $c1 = Customer::query()->where('email', 'customer@shopco.local')->firstOrFail();
+    $c2 = Customer::query()->where('email', 'alex@example.com')->firstOrFail();
+    $t1 = $c1->createToken('customer-auth', ['customer'])->plainTextToken;
+    $t2 = $c2->createToken('customer-auth', ['customer'])->plainTextToken;
+
+    $admin = Staff::query()->where('email', 'orders@shopco.local')->firstOrFail();
+    $adminToken = $admin->createToken('admin-auth', ['staff'])->plainTextToken;
+
+    $product = Product::query()->where('slug', 'compression-training-tank')->firstOrFail();
+    $product->update(['stock_quantity' => 5]);
+
+    // 1. Customer adds 3 units while stock is 5
+    auth()->forgetGuards();
+    $this->withToken($t1)->postJson('/api/v1/cart/items', [
+        'product_id' => $product->id,
+        'quantity' => 3,
+    ])->assertCreated();
+
+    // 2. Stock changes to 2 BEFORE checkout -> checkout rejects with 409 & clear message, stock untouched
+    $product->update(['stock_quantity' => 2]);
+    $ordersBefore = Order::query()->count();
+
+    auth()->forgetGuards();
+    $this->withToken($t1)->postJson('/api/v1/checkout', [
+        'shipping_full_name' => 'Sarah Miller',
+        'shipping_email' => $c1->email,
+        'shipping_phone' => '+1-555-0201',
+        'shipping_address' => '742 Evergreen Terrace',
+        'shipping_city' => 'New York',
+        'shipping_postal_code' => '10001',
+    ])
+        ->assertStatus(409)
+        ->assertJsonPath('success', false)
+        ->assertSee('Insufficient stock for');
+
+    expect(Order::query()->count())->toBe($ordersBefore);
+    expect($product->fresh()->stock_quantity)->toBe(2);
+
+    // 3. Stock returns to 3 -> checkout creates pending order WITHOUT deducting stock yet
+    $product->update(['stock_quantity' => 3]);
+    auth()->forgetGuards();
+    $checkout = $this->withToken($t1)->postJson('/api/v1/checkout', [
+        'shipping_full_name' => 'Sarah Miller',
+        'shipping_email' => $c1->email,
+        'shipping_phone' => '+1-555-0201',
+        'shipping_address' => '742 Evergreen Terrace',
+        'shipping_city' => 'New York',
+        'shipping_postal_code' => '10001',
+    ])->assertCreated();
+
+    $orderId = $checkout->json('data.order.id');
+    expect($product->fresh()->stock_quantity)->toBe(3);
+
+    // Pre-payment stock validation passes while stock >= 3, and enforces IDOR (403 for other customer)
+    auth()->forgetGuards();
+    $this->withToken($t2)->postJson("/api/v1/orders/{$orderId}/validate-stock")->assertForbidden();
+    auth()->forgetGuards();
+    $this->withToken($t1)->postJson("/api/v1/orders/{$orderId}/validate-stock")
+        ->assertOk()
+        ->assertJsonPath('data.stock_available', true);
+
+    // 4. Stock drops to 1 BETWEEN checkout and clicking Pay -> pre-payment validation rejects with 409 + clear message
+    $product->update(['stock_quantity' => 1]);
+    auth()->forgetGuards();
+    $this->withToken($t1)->postJson("/api/v1/orders/{$orderId}/validate-stock")
+        ->assertStatus(409)
+        ->assertJsonPath('success', false)
+        ->assertSee('Order rejected: insufficient stock for');
+
+    // 5. Cancelling an UNPAID pending order does NOT inflate stock (remains 1)
+    auth()->forgetGuards();
+    $this->withToken($adminToken)->postJson("/api/v1/admin/orders/{$orderId}/cancel", [
+        'reason' => 'Stock no longer available before payment',
+    ])->assertOk()->assertJsonPath('data.status', 'cancelled');
+
+    expect($product->fresh()->stock_quantity)->toBe(1);
+});

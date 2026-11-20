@@ -35,6 +35,23 @@ class CheckoutController extends Controller
         ], 'Checkout initialized. Complete payment to confirm your order.', 201);
     }
 
+    public function validateStock(Request $request, Order $order): JsonResponse
+    {
+        /** @var Customer $customer */
+        $customer = $request->user('customer');
+
+        if ($customer->cannot('pay', $order)) {
+            return ApiResponse::error('You are not authorized to access this order.', 403);
+        }
+
+        $this->checkoutService->validateStockForPayment($customer, $order);
+
+        return ApiResponse::success(
+            ['order_id' => $order->id, 'stock_available' => true],
+            'Inventory verified for payment.'
+        );
+    }
+
     public function retryPayment(Request $request, Order $order): JsonResponse
     {
         /** @var Customer $customer */
