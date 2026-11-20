@@ -164,7 +164,7 @@ class AdminAuthController extends Controller
         );
 
         if ($status !== Password::PASSWORD_RESET) {
-            return ApiResponse::error('Unable to reset password. The token may be invalid or expired.', 422);
+            return ApiResponse::error('Unable to reset password. The token may be invalid or expired', 422);
         }
 
         return ApiResponse::success(null, 'Password has been reset successfully');
