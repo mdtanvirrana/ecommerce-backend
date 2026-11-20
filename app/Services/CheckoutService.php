@@ -12,6 +12,7 @@ use App\Models\Payment;
 use App\Models\Product;
 use App\Support\Money;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class CheckoutService
 {
@@ -184,6 +185,13 @@ class CheckoutService
                 idempotencyKey: "checkout-order-{$order->id}-payment-{$payment->id}",
             );
         } catch (\Throwable $e) {
+            Log::error('Stripe PaymentIntent creation failed during checkout.', [
+                'order_id' => $order->id,
+                'order_number' => $order->order_number,
+                'payment_id' => $payment->id,
+                'error' => $e->getMessage(),
+            ]);
+
             $payment->update([
                 'status' => PaymentStatus::Failed,
                 'failure_message' => $e->getMessage(),
@@ -252,17 +260,38 @@ class CheckoutService
             'status' => PaymentStatus::Pending,
         ]);
 
-        $intent = $this->stripeGateway->createPaymentIntent(
-            amountInCents: Money::toCents($order->total_amount),
-            currency: $order->currency,
-            metadata: [
-                'order_id' => (string) $order->id,
+        try {
+            $intent = $this->stripeGateway->createPaymentIntent(
+                amountInCents: Money::toCents($order->total_amount),
+                currency: $order->currency,
+                metadata: [
+                    'order_id' => (string) $order->id,
+                    'order_number' => $order->order_number,
+                    'customer_id' => (string) $customer->id,
+                    'retry_payment_id' => (string) $payment->id,
+                ],
+                idempotencyKey: "retry-order-{$order->id}-payment-{$payment->id}",
+            );
+        } catch (\Throwable $e) {
+            Log::error('Stripe PaymentIntent creation failed during payment retry.', [
+                'order_id' => $order->id,
                 'order_number' => $order->order_number,
-                'customer_id' => (string) $customer->id,
-                'retry_payment_id' => (string) $payment->id,
-            ],
-            idempotencyKey: "retry-order-{$order->id}-payment-{$payment->id}",
-        );
+                'payment_id' => $payment->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            $payment->update([
+                'status' => PaymentStatus::Failed,
+                'failure_message' => $e->getMessage(),
+            ]);
+            $order->update(['payment_status' => PaymentStatus::Failed]);
+
+            if ($e instanceof DomainException) {
+                throw $e;
+            }
+
+            throw new DomainException('Unable to initialize Stripe payment. Please try again.', 502);
+        }
 
         $payment->update([
             'stripe_payment_intent_id' => $intent['id'],

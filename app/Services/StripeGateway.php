@@ -32,7 +32,7 @@ class StripeGateway implements StripeGatewayInterface
         $intent = $this->client()->paymentIntents->create([
             'amount' => $amountInCents,
             'currency' => strtolower($currency),
-            'payment_method_types' => ['card'],
+            'allowed_payment_method_types' => ['card'],
             'metadata' => $metadata,
         ], $options);
 
