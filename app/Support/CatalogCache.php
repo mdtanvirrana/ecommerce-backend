@@ -7,7 +7,7 @@ use Illuminate\Support\Facades\Cache;
 
 class CatalogCache
 {
-    private const string VERSION_KEY = 'catalog:cache_version';
+    private const string VERSION_KEY = 'catalog:cache_version_v2';
 
     public static function version(): int
     {
@@ -15,19 +15,22 @@ class CatalogCache
     }
 
     /**
-     * Cache public catalog read payloads under a versioned key so any admin mutation
-     * or inventory change invalidates all cached views immediately.
+     * Cache public catalog read payloads as pure JSON strings under a versioned key.
+     * Storing JSON (instead of raw PHP-serialized JsonResource trees) avoids
+     * __PHP_Incomplete_Class corruption when FileStore unserializes with allowed_classes=false,
+     * and any admin mutation or inventory update invalidates all cached entries immediately.
      *
-     * @template T
-     *
-     * @param  Closure(): T  $resolver
-     * @return T
+     * @param  Closure(): mixed  $resolver
      */
     public static function remember(string $key, int $ttlSeconds, Closure $resolver): mixed
     {
-        $versionedKey = sprintf('catalog:v%d:%s', self::version(), $key);
+        $versionedKey = sprintf('catalog:json:v%d:%s', self::version(), $key);
 
-        return Cache::remember($versionedKey, now()->addSeconds($ttlSeconds), $resolver);
+        $encoded = Cache::remember($versionedKey, now()->addSeconds($ttlSeconds), function () use ($resolver): string {
+            return json_encode($resolver(), JSON_THROW_ON_ERROR);
+        });
+
+        return json_decode((string) $encoded, true, 512, JSON_THROW_ON_ERROR);
     }
 
     public static function invalidate(): void

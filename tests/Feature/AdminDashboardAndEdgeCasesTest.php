@@ -8,11 +8,13 @@ use App\Models\InventoryTransaction;
 use App\Models\Product;
 use App\Models\Staff;
 use App\Services\StripeGatewayInterface;
+use App\Support\CatalogCache;
 use Database\Seeders\CatalogSeeder;
 use Database\Seeders\DemoCommerceSeeder;
 use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
 use Tests\Support\FakeStripeGateway;
@@ -231,4 +233,32 @@ it('supports category image upload and dynamic product reviews with exact count 
     auth()->forgetGuards();
     $this->withToken($adminToken)->deleteJson("/api/v1/admin/reviews/{$reviewId}")->assertOk();
     expect($product->fresh()->reviews_count)->toBe(0);
+});
+
+it('preserves clean nested arrays when serving public catalog endpoints from file cache', function (): void {
+    config()->set('cache.default', 'file');
+    Cache::setDefaultDriver('file');
+    CatalogCache::invalidate();
+
+    // First call populates file cache; second call reads unserialized payload from file cache
+    foreach ([1, 2] as $attempt) {
+        $cats = $this->getJson('/api/v1/categories')->assertOk();
+        expect($cats->getContent())->not->toContain('__PHP_Incomplete_Class');
+        expect($cats->json('data.0.children'))->toBeArray()->not->toBeEmpty();
+
+        $prods = $this->getJson('/api/v1/products?per_page=2')->assertOk();
+        expect($prods->getContent())->not->toContain('__PHP_Incomplete_Class');
+        expect($prods->json('data.0.images'))->toBeArray();
+        expect($prods->json('data.0.category.slug'))->toBeString();
+
+        $slug = (string) $prods->json('data.0.slug');
+        $detail = $this->getJson("/api/v1/products/{$slug}")->assertOk();
+        expect($detail->getContent())->not->toContain('__PHP_Incomplete_Class');
+        expect($detail->json('data.product.images'))->toBeArray();
+        expect($detail->json('data.related_products'))->toBeArray();
+
+        $reviews = $this->getJson('/api/v1/reviews/featured')->assertOk();
+        expect($reviews->getContent())->not->toContain('__PHP_Incomplete_Class');
+        expect($reviews->json('data'))->toBeArray();
+    }
 });
