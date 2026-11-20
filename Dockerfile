@@ -28,10 +28,10 @@ COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 WORKDIR /var/www/html
 
 COPY composer.json composer.lock ./
-RUN composer install --no-interaction --prefer-dist --no-scripts --no-progress
+RUN composer install --no-dev --no-interaction --prefer-dist --no-scripts --no-progress
 
 COPY . .
-RUN composer dump-autoload --optimize \
+RUN composer dump-autoload --optimize --no-dev \
   && chmod +x docker/entrypoint.sh \
   && mkdir -p storage/framework/cache storage/framework/sessions storage/framework/views storage/logs bootstrap/cache \
   && chmod -R 775 storage bootstrap/cache
@@ -39,4 +39,4 @@ RUN composer dump-autoload --optimize \
 EXPOSE 8000
 
 ENTRYPOINT ["/var/www/html/docker/entrypoint.sh"]
-CMD ["php", "artisan", "serve", "--host=0.0.0.0", "--port=8000"]
+CMD ["sh", "-c", "php artisan serve --host=0.0.0.0 --port=${PORT:-8000}"]
