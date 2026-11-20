@@ -16,6 +16,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Password;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Str;
@@ -139,7 +140,14 @@ class AdminAuthController extends Controller
 
     public function forgotPassword(ForgotPasswordRequest $request): JsonResponse
     {
-        Password::broker('staff')->sendResetLink(['email' => strtolower($request->validated('email'))]);
+        try {
+            Password::broker('staff')->sendResetLink(['email' => strtolower($request->validated('email'))]);
+        } catch (\Throwable $e) {
+            Log::warning('Unable to send staff password reset email.', [
+                'email' => strtolower($request->validated('email')),
+                'error' => $e->getMessage(),
+            ]);
+        }
 
         return ApiResponse::success(
             null,

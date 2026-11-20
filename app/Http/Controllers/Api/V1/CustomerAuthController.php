@@ -16,6 +16,7 @@ use Illuminate\Auth\Events\PasswordReset;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Password;
 use Illuminate\Support\Facades\RateLimiter;
@@ -118,7 +119,16 @@ class CustomerAuthController extends Controller
     private function queueVerificationEmail(Customer $customer): void
     {
         $url = $this->buildVerificationUrl($customer);
-        Mail::to($customer->email)->queue(new VerifyCustomerEmailMail($customer, $url));
+
+        try {
+            Mail::to($customer->email)->queue(new VerifyCustomerEmailMail($customer, $url));
+        } catch (\Throwable $e) {
+            Log::warning('Unable to send customer verification email.', [
+                'customer_id' => $customer->id,
+                'email' => $customer->email,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     private function signVerificationPayload(int $id, string $hash, int $expires): string
@@ -191,7 +201,14 @@ class CustomerAuthController extends Controller
 
     public function forgotPassword(ForgotPasswordRequest $request): JsonResponse
     {
-        Password::broker('customers')->sendResetLink(['email' => strtolower($request->validated('email'))]);
+        try {
+            Password::broker('customers')->sendResetLink(['email' => strtolower($request->validated('email'))]);
+        } catch (\Throwable $e) {
+            Log::warning('Unable to send customer password reset email.', [
+                'email' => strtolower($request->validated('email')),
+                'error' => $e->getMessage(),
+            ]);
+        }
 
         // Generic message avoids user enumeration.
         return ApiResponse::success(
