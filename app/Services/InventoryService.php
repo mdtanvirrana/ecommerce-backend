@@ -7,6 +7,7 @@ use App\Exceptions\DomainException;
 use App\Models\InventoryTransaction;
 use App\Models\Order;
 use App\Models\Product;
+use App\Support\CatalogCache;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\DB;
 
@@ -86,6 +87,7 @@ class InventoryService
         }
 
         $order->forceFill(['stock_deducted_at' => now()])->save();
+        CatalogCache::invalidate();
     }
 
     /**
@@ -140,6 +142,7 @@ class InventoryService
         }
 
         $order->forceFill(['stock_restored_at' => now()])->save();
+        CatalogCache::invalidate();
 
         return true;
     }
@@ -168,6 +171,8 @@ class InventoryService
                     'notes' => $notes,
                 ]);
             }
+
+            CatalogCache::invalidate();
 
             return $locked->fresh();
         });

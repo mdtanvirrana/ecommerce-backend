@@ -11,6 +11,7 @@ use App\Models\Order;
 use App\Models\Product;
 use App\Models\Review;
 use App\Support\ApiResponse;
+use App\Support\CatalogCache;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -18,48 +19,72 @@ class ReviewController extends Controller
 {
     public function featured(): JsonResponse
     {
-        $reviews = Review::query()
-            ->with('product')
-            ->where('is_approved', true)
-            ->where('is_featured', true)
-            ->orderByDesc('created_at')
-            ->limit(12)
-            ->get();
+        $payload = CatalogCache::remember('reviews:featured', 120, function (): array {
+            $reviews = Review::query()
+                ->with('product')
+                ->where('is_approved', true)
+                ->where('is_featured', true)
+                ->orderByDesc('created_at')
+                ->limit(12)
+                ->get();
+
+            return ReviewResource::collection($reviews)->resolve();
+        });
 
         return ApiResponse::success(
-            ReviewResource::collection($reviews),
+            $payload,
             'Featured reviews retrieved successfully.'
-        );
+        )->header('Cache-Control', 'public, max-age=30, stale-while-revalidate=60');
     }
 
     public function index(Request $request, string $slug): JsonResponse
     {
-        $product = Product::query()->where('slug', $slug)->where('is_active', true)->first();
+        $perPage = min(max((int) $request->integer('per_page', 6), 1), 50);
+        $page = max(1, (int) $request->integer('page', 1));
+        $sort = (string) $request->query('sort', 'latest');
+        $cacheKey = "reviews:product:{$slug}:p{$page}:pp{$perPage}:s{$sort}";
 
-        if ($product === null) {
+        $cached = CatalogCache::remember($cacheKey, 60, function () use ($slug, $perPage, $sort): ?array {
+            $product = Product::query()->where('slug', $slug)->where('is_active', true)->first();
+
+            if ($product === null) {
+                return null;
+            }
+
+            $query = Review::query()
+                ->where('product_id', $product->id)
+                ->where('is_approved', true);
+
+            match ($sort) {
+                'highest' => $query->orderByDesc('rating')->orderByDesc('created_at'),
+                'lowest' => $query->orderBy('rating')->orderByDesc('created_at'),
+                default => $query->orderByDesc('created_at')->orderByDesc('id'),
+            };
+
+            $paginator = $query->paginate($perPage);
+
+            return [
+                'data' => ReviewResource::collection($paginator->items())->resolve(),
+                'meta' => [
+                    'current_page' => $paginator->currentPage(),
+                    'last_page' => $paginator->lastPage(),
+                    'per_page' => $paginator->perPage(),
+                    'total' => $paginator->total(),
+                    'from' => $paginator->firstItem(),
+                    'to' => $paginator->lastItem(),
+                ],
+            ];
+        });
+
+        if ($cached === null) {
             return ApiResponse::error('Product not found.', 404);
         }
 
-        $perPage = min(max((int) $request->integer('per_page', 6), 1), 50);
-        $sort = (string) $request->query('sort', 'latest');
-
-        $query = Review::query()
-            ->where('product_id', $product->id)
-            ->where('is_approved', true);
-
-        match ($sort) {
-            'highest' => $query->orderByDesc('rating')->orderByDesc('created_at'),
-            'lowest' => $query->orderBy('rating')->orderByDesc('created_at'),
-            default => $query->orderByDesc('created_at')->orderByDesc('id'),
-        };
-
-        $paginator = $query->paginate($perPage);
-
-        return ApiResponse::paginated(
-            $paginator,
-            ReviewResource::collection($paginator->items()),
-            'Product reviews retrieved successfully.'
-        );
+        return ApiResponse::success(
+            data: $cached['data'],
+            message: 'Product reviews retrieved successfully.',
+            meta: $cached['meta'],
+        )->header('Cache-Control', 'public, max-age=30, stale-while-revalidate=60');
     }
 
     public function store(StoreReviewRequest $request, string $slug): JsonResponse
@@ -92,6 +117,7 @@ class ReviewController extends Controller
         ]);
 
         Review::syncProductRating($product->id);
+        CatalogCache::invalidate();
 
         return ApiResponse::success(
             new ReviewResource($review->load('product')),

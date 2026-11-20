@@ -12,6 +12,7 @@ use App\Models\ProductImage;
 use App\Models\Staff;
 use App\Services\InventoryService;
 use App\Support\ApiResponse;
+use App\Support\CatalogCache;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -82,6 +83,8 @@ class AdminProductController extends Controller
             return $created->fresh(['category.parent', 'images']);
         });
 
+        CatalogCache::invalidate();
+
         return ApiResponse::success(new ProductResource($product), 'Product created successfully.', 201);
     }
 
@@ -121,6 +124,8 @@ class AdminProductController extends Controller
 
             return $product->fresh(['category.parent', 'images']);
         });
+
+        CatalogCache::invalidate();
 
         return ApiResponse::success(new ProductResource($updated), 'Product updated successfully.');
     }
@@ -165,6 +170,8 @@ class AdminProductController extends Controller
             $next?->update(['is_primary' => true]);
         }
 
+        CatalogCache::invalidate();
+
         return ApiResponse::success(
             new ProductResource($product->fresh(['category.parent', 'images'])),
             'Product image deleted.'
@@ -174,6 +181,7 @@ class AdminProductController extends Controller
     public function destroy(Product $product): JsonResponse
     {
         $product->delete();
+        CatalogCache::invalidate();
 
         return ApiResponse::success(null, 'Product deleted successfully.');
     }

@@ -23,6 +23,12 @@ RUN apk add --no-cache \
     pdo_mysql \
     zip
 
+# Enable OPcache for CLI server & multi-worker PHP server so parallel API calls don't serialize
+RUN printf "opcache.enable=1\nopcache.enable_cli=1\nopcache.memory_consumption=128\nopcache.interned_strings_buffer=16\nopcache.max_accelerated_files=10000\nopcache.validate_timestamps=0\n" \
+  > /usr/local/etc/php/conf.d/opcache-production.ini
+
+ENV PHP_CLI_SERVER_WORKERS=6
+
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
 WORKDIR /var/www/html

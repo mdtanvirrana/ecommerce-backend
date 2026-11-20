@@ -36,4 +36,9 @@ if [ "${RUN_MIGRATIONS:-true}" = "true" ]; then
   fi
 fi
 
+# Cache config, routes, and events at runtime startup for faster Laravel boot on Render/Docker
+php artisan config:cache >/dev/null 2>&1 || true
+php artisan route:cache >/dev/null 2>&1 || true
+php artisan event:cache >/dev/null 2>&1 || true
+
 exec "$@"

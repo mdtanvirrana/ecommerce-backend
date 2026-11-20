@@ -9,6 +9,7 @@ use App\Http\Requests\Admin\UpdateCategoryRequest;
 use App\Http\Resources\CategoryResource;
 use App\Models\Category;
 use App\Support\ApiResponse;
+use App\Support\CatalogCache;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -54,6 +55,7 @@ class AdminCategoryController extends Controller
         }
 
         $category = Category::query()->create($data);
+        CatalogCache::invalidate();
 
         return ApiResponse::success(
             new CategoryResource($category->load(['parent', 'children'])),
@@ -105,6 +107,7 @@ class AdminCategoryController extends Controller
         }
 
         $category->update($data);
+        CatalogCache::invalidate();
 
         return ApiResponse::success(
             new CategoryResource($category->fresh(['parent', 'children'])),
@@ -127,6 +130,7 @@ class AdminCategoryController extends Controller
         }
 
         $category->delete();
+        CatalogCache::invalidate();
 
         return ApiResponse::success(null, 'Category deleted successfully.');
     }

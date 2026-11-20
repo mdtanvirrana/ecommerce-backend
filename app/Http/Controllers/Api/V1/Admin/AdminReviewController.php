@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Resources\ReviewResource;
 use App\Models\Review;
 use App\Support\ApiResponse;
+use App\Support\CatalogCache;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -44,12 +45,20 @@ class AdminReviewController extends Controller
 
         $paginator = $query->orderByDesc('created_at')->orderByDesc('id')->paginate($perPage);
 
+        $stats = Review::query()
+            ->selectRaw('COUNT(*) as total_reviews')
+            ->selectRaw('SUM(CASE WHEN is_approved = 1 THEN 1 ELSE 0 END) as approved_reviews')
+            ->selectRaw('SUM(CASE WHEN is_approved = 0 THEN 1 ELSE 0 END) as pending_reviews')
+            ->selectRaw('SUM(CASE WHEN is_featured = 1 AND is_approved = 1 THEN 1 ELSE 0 END) as featured_reviews')
+            ->selectRaw('AVG(CASE WHEN is_approved = 1 THEN rating END) as average_rating')
+            ->first();
+
         $summary = [
-            'total_reviews' => Review::query()->count(),
-            'approved_reviews' => Review::query()->where('is_approved', true)->count(),
-            'pending_reviews' => Review::query()->where('is_approved', false)->count(),
-            'featured_reviews' => Review::query()->where('is_featured', true)->where('is_approved', true)->count(),
-            'average_rating' => number_format((float) (Review::query()->where('is_approved', true)->avg('rating') ?? 0), 2, '.', ''),
+            'total_reviews' => (int) ($stats->total_reviews ?? 0),
+            'approved_reviews' => (int) ($stats->approved_reviews ?? 0),
+            'pending_reviews' => (int) ($stats->pending_reviews ?? 0),
+            'featured_reviews' => (int) ($stats->featured_reviews ?? 0),
+            'average_rating' => number_format((float) ($stats->average_rating ?? 0), 2, '.', ''),
         ];
 
         return ApiResponse::success(
@@ -79,6 +88,7 @@ class AdminReviewController extends Controller
 
         $review->update($data);
         Review::syncProductRating($review->product_id);
+        CatalogCache::invalidate();
 
         return ApiResponse::success(
             new ReviewResource($review->fresh(['product'])),
@@ -91,6 +101,7 @@ class AdminReviewController extends Controller
         $productId = $review->product_id;
         $review->delete();
         Review::syncProductRating($productId);
+        CatalogCache::invalidate();
 
         return ApiResponse::success(null, 'Review deleted successfully.');
     }
